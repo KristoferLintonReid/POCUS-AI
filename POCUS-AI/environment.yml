@@ -1,0 +1,40 @@
+name: pocus-ai
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  # Deep Learning
+  - pytorch
+  - torchvision
+  - pytorch-lightning
+  - cudatoolkit=11.8
+  - timm
+  # Medical Imaging
+  - monai
+  - pydicom
+  - nibabel
+  - scikit-image
+  # Data Science
+  - numpy
+  - pandas
+  - scikit-learn
+  - scipy
+  # Visualization
+  - matplotlib
+  - seaborn
+  # Development
+  - jupyterlab
+  - ipywidgets
+  - black
+  - flake8
+  - pytest
+  - pytest-cov
+  # Experiment Management
+  - hydra-core
+  - wandb
+  - pip:
+    - pyradiomics
+    - albumentations
