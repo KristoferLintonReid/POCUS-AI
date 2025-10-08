@@ -170,8 +170,4 @@ Contributions are welcome! Please open an issue or submit a pull request for any
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## 📞 Contact
 
-For questions and feedback, please open an issue in the GitHub repository or contact:
-
-- Email: k.linton-reid@example.com
