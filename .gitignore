@@ -81,3 +81,6 @@ yarn-error.log
 # Logs
 logs/
 *.log
+
+# Temporary/old directories
+POCUS-AI-old/
