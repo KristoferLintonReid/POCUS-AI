@@ -66,7 +66,7 @@ def extract_first_order_features(sitk_img):
     return extractor.execute()
 
 def find_paired_images():
-    """Identifies folders with paired HH and SC images."""
+    """Identifies folders with paired HH and SC images by matching suffixes."""
     pairs = []
     if not os.path.isdir(EP_IMG):
         return []
@@ -79,25 +79,32 @@ def find_paired_images():
         case_no = int(m.group())
         
         files = os.listdir(full)
-        hh_imgs = [os.path.join(full, f) for f in files 
-                   if f.upper().startswith("HH") and f.lower().endswith(('.png', '.jpg', '.jpeg', '.dcm'))]
-        sc_imgs = [os.path.join(full, f) for f in files 
-                   if f.upper().startswith("SC") and f.lower().endswith('.dcm')]
         
-        if hh_imgs and sc_imgs:
-            # For simplicity, pick representative pairs (e.g., uterus or first available)
-            def pick_best(paths):
-                for kw in ["uterus", "sac", "sagital", "embryo"]:
-                    for p in paths:
-                        if kw in os.path.basename(p).lower():
-                            return p
-                return paths[0]
-            
-            pairs.append({
-                "Case No": case_no,
-                "hh_path": pick_best(hh_imgs),
-                "sc_path": pick_best(sc_imgs)
-            })
+        # 1. Map HH images by their suffix (text after "HH ")
+        hh_map = {}
+        for f in files:
+            if f.upper().startswith("HH") and f.lower().endswith(('.png', '.jpg', '.jpeg', '.dcm')):
+                suffix = _re.sub(r"^HH\s*", "", f, flags=_re.IGNORECASE)
+                suffix = os.path.splitext(suffix)[0].strip().lower()
+                hh_map[suffix] = os.path.join(full, f)
+        
+        # 2. Map SC images by their suffix (text after "SC ")
+        sc_map = {}
+        for f in files:
+            if f.upper().startswith("SC") and f.lower().endswith('.dcm'):
+                suffix = _re.sub(r"^SC\s*", "", f, flags=_re.IGNORECASE)
+                suffix = os.path.splitext(suffix)[0].strip().lower()
+                sc_map[suffix] = os.path.join(full, f)
+        
+        # 3. Pair them up where suffixes match
+        for sfx, hh_path in hh_map.items():
+            if sfx in sc_map:
+                pairs.append({
+                    "Case No": case_no,
+                    "Suffix": sfx,
+                    "hh_path": hh_path,
+                    "sc_path": sc_map[sfx]
+                })
     return pairs
 
 def main():
@@ -122,7 +129,7 @@ def main():
             print(f"  Extracting SC features...")
             feat_sc = extract_first_order_features(sitk_sc)
             
-            row = {"Case No": case}
+            row = {"Case No": case, "Suffix": pair["Suffix"]}
             for k, v in feat_hh.items():
                 # cast to float scalar to avoid numpy array issues in pandas
                 row[f"HH_{k}"] = float(v)
