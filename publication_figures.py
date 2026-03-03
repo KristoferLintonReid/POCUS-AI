@@ -665,7 +665,7 @@ def fig_bmi_gradient():
         2, N,
         figure=fig,
         hspace=0.06, wspace=0.05,
-        top=0.88, bottom=0.18,
+        top=0.85, bottom=0.22,
         left=0.07, right=0.97,
     )
 
@@ -701,7 +701,7 @@ def fig_bmi_gradient():
             draw_cell(1, col_i, paired_data[case]["sc"], bmi, "SC (Standard Care)")
 
     # ── Shared BMI colorbar ──────────────────────────────────────────
-    cax = fig.add_axes([0.07, 0.02, 0.90, 0.038])
+    cax = fig.add_axes([0.07, 0.05, 0.90, 0.035])
     sm  = plt.cm.ScalarMappable(
         cmap=bmi_cmap, norm=plt.Normalize(vmin=bmi_lo, vmax=bmi_hi))
     sm.set_array([])
@@ -719,7 +719,7 @@ def fig_bmi_gradient():
 
     fig.suptitle(
         "POCUS Paired Image Quality (HH vs SC) Across BMI Range",
-        color="white", fontsize=FONT_BASE + 4, fontweight="bold", y=0.99,
+        color="white", fontsize=FONT_BASE + 4, fontweight="bold", y=0.97,
     )
     savefig("fig10_bmi_gradient_images.png")
 # ══════════════════════════════════════════════════════════════════════
