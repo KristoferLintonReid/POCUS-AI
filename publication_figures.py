@@ -575,20 +575,27 @@ def fig_demographics():
 #  FIGURE 10 – BMI Gradient: Example DICOM images (low → high BMI)
 # ══════════════════════════════════════════════════════════════════════
 def fig_bmi_gradient():
+    """
+    BMI gradient figure: 2 rows (HH top, SC bottom), 5 columns.
+    Columns are anchored to 5 evenly-spaced BMI values from the SC dataset.
+    SC row: image from patient closest to each anchor BMI.
+    HH row: images ordered by patient Age (BMI unavailable for PG cases),
+            displayed at the same 5 column positions.
+    One shared BMI colorbar sits below both rows as a coherent x-axis.
+    No 'BMI N/A' labels anywhere.
+    """
     try:
         import pydicom
     except ImportError:
         print("  ⚠  pydicom not installed – skipping BMI image gradient figure.")
-        print("     Install with: pip install pydicom")
         return
 
     df_ep = pd.read_excel(EP_SHEET)
-    df_ep["BMI"]    = pd.to_numeric(df_ep["BMI"],    errors="coerce")
-    df_ep["Age"]    = pd.to_numeric(df_ep["Age"],    errors="coerce")
+    df_ep["BMI"]     = pd.to_numeric(df_ep["BMI"],    errors="coerce")
+    df_ep["Age"]     = pd.to_numeric(df_ep["Age"],    errors="coerce")
     df_ep["Case No"] = pd.to_numeric(df_ep["Case No"], errors="coerce")
 
-    # Build case → DICOM list maps
-    # HH: PG1-PG10, SC: QI 194 etc.
+    # ── Build folder → DICOM maps ─────────────────────────────────────
     hh_map, sc_map = {}, {}
     if os.path.isdir(EP_IMG):
         for fld in sorted(os.listdir(EP_IMG)):
@@ -605,126 +612,127 @@ def fig_bmi_gradient():
                 try: sc_map[int(fld.split()[1])] = dcms
                 except (ValueError, IndexError): pass
 
-    # ── HH picks: BMI missing for PG cases → sort by Age instead ──
-    hh_df = df_ep[df_ep["Case No"].isin(hh_map.keys())].copy()
-    hh_df["sort_key"] = hh_df["BMI"].fillna(hh_df["Age"])   # use BMI else Age
-    hh_df = hh_df.sort_values("sort_key").reset_index(drop=True)
-    # pick 5 evenly spaced
-    n = len(hh_df)
-    hh_idx = [int(round(i)) for i in np.linspace(0, n-1, min(5, n))]
-    hh_picks = []
-    for i in hh_idx:
-        row = hh_df.iloc[i]
-        bmi_val  = row["BMI"]  if pd.notna(row["BMI"])  else np.nan
-        age_val  = row["Age"]  if pd.notna(row["Age"])  else np.nan
-        hh_picks.append((int(row["Case No"]), bmi_val, age_val))
-
-    # ── SC picks: sorted by BMI ──
-    sc_df = df_ep[df_ep["Case No"].isin(sc_map.keys()) & df_ep["BMI"].notna()].sort_values("BMI")
-    n = len(sc_df)
-    sc_idx  = [int(round(i)) for i in np.linspace(0, n-1, min(5, n))]
-    sc_picks = [(int(sc_df.iloc[i]["Case No"]), sc_df.iloc[i]["BMI"], sc_df.iloc[i]["Age"])
-                for i in sc_idx]
-
-    n_cols = 5   # always 5 columns
-    if not hh_picks and not sc_picks:
+    if not hh_map and not sc_map:
         print("  ⚠  No DICOM images found – skipping BMI gradient figure.")
         return
 
-    def load_pixel(dcm_path):
-        ds = pydicom.dcmread(dcm_path, force=True)
+    # ── Choose 5 BMI anchor points from SC data (have real BMI) ──────
+    N_COLS = 5
+    sc_bmi_df = (df_ep[df_ep["Case No"].isin(sc_map.keys()) & df_ep["BMI"].notna()]
+                 .sort_values("BMI").reset_index(drop=True))
+
+    # Evenly spaced across sorted SC BMI range
+    idx = [int(round(i)) for i in np.linspace(0, len(sc_bmi_df)-1, N_COLS)]
+    sc_picks = [sc_bmi_df.iloc[i] for i in idx]           # Series per pick
+    anchor_bmis = [row["BMI"] for row in sc_picks]         # 5 BMI values
+
+    bmi_min, bmi_max = anchor_bmis[0], anchor_bmis[-1]
+
+    # ── HH picks: PG cases sorted by Age (no BMI) ────────────────────
+    hh_df = (df_ep[df_ep["Case No"].isin(hh_map.keys())]
+             .sort_values("Age").reset_index(drop=True))
+    hh_idx = [int(round(i)) for i in np.linspace(0, len(hh_df)-1, N_COLS)]
+    hh_picks = [hh_df.iloc[i] for i in hh_idx]
+
+    # ── Helpers ───────────────────────────────────────────────────────
+    def load_pixel(path):
+        ds  = pydicom.dcmread(path, force=True)
         arr = ds.pixel_array.astype(float)
         if arr.ndim == 3:
             arr = arr[..., 0]
         return (arr - arr.min()) / (arr.max() - arr.min() + 1e-9)
 
-    # BMI colormap: cool-blue (low) → warm-red (high)
     bmi_cmap = LinearSegmentedColormap.from_list(
-        "bmi", ["#bfdbfe", "#1d4ed8", "#7f1d1d"], N=256)
-    age_cmap = LinearSegmentedColormap.from_list(
-        "age", ["#d1fae5", "#065f46", "#1e1b4b"], N=256)
+        "bmi_grad", ["#bfdbfe", "#1d4ed8", "#7f1d1d"], N=256)
 
-    n_rows = 2   # HH top, SC bottom
-    fig = plt.figure(figsize=(4.2 * n_cols + 1, 5 * n_rows + 2))
+    def bmi_norm(bmi):
+        return np.clip((bmi - bmi_min) / (bmi_max - bmi_min), 0, 1)
+
+    # ── Layout ────────────────────────────────────────────────────────
+    fig_w = 3.8 * N_COLS + 1.5
+    fig_h = 5.2 * 2 + 2.0           # 2 image rows + space for shared colorbar
+    fig = plt.figure(figsize=(fig_w, fig_h))
     fig.patch.set_facecolor("#0f172a")
-    outer = gridspec.GridSpec(n_rows, 1, figure=fig, hspace=0.22,
-                              top=0.88, bottom=0.12)
 
-    def fill_row(row_idx, picks, case_map, row_title, use_bmi):
-        inner = gridspec.GridSpecFromSubplotSpec(
-            1, n_cols, subplot_spec=outer[row_idx], wspace=0.06)
-        for col_i in range(n_cols):
-            ax = fig.add_subplot(inner[col_i])
-            ax.set_facecolor("#0f172a")
-            ax.set_xticks([]); ax.set_yticks([])
-            for sp in ax.spines.values():
-                sp.set_visible(True)
-                sp.set_linewidth(3)
+    # GridSpec: row0=HH images, row1=SC images, row2=shared colorbar
+    gs = gridspec.GridSpec(
+        3, N_COLS,
+        figure=fig,
+        height_ratios=[1, 1, 0.10],
+        hspace=0.18, wspace=0.06,
+        top=0.88, bottom=0.10,
+        left=0.06, right=0.97,
+    )
 
-            if col_i >= len(picks):
-                # empty slot
-                ax.text(0.5, 0.5, "N/A", ha="center", va="center",
-                        color="#64748b", fontsize=FONT_BASE)
-                continue
+    def place_image(row_idx, col_idx, dcm_list, bmi_anchor, row_label):
+        ax = fig.add_subplot(gs[row_idx, col_idx])
+        ax.set_facecolor("#0f172a")
+        ax.set_xticks([]); ax.set_yticks([])
 
-            case, bmi, age = picks[col_i]
-            dcms = case_map.get(int(case), [])
-            mid  = dcms[len(dcms)//2] if dcms else None
+        # Spine colour keyed to BMI anchor
+        border_clr = bmi_cmap(bmi_norm(bmi_anchor))
+        for sp in ax.spines.values():
+            sp.set_visible(True)
+            sp.set_edgecolor(border_clr)
+            sp.set_linewidth(3.5)
 
-            if use_bmi and pd.notna(bmi):
-                cmap_use = bmi_cmap
-                norm_val = min((bmi - 16) / (50 - 16), 1.0)
-                xlabel   = f"BMI {bmi:.1f}"
-            else:
-                cmap_use = age_cmap
-                norm_val = min((age - 18) / (50 - 18), 1.0) if pd.notna(age) else 0.5
-                xlabel   = f"Age {int(age)}\n(BMI N/A)" if pd.notna(age) else "N/A"
+        mid = dcm_list[len(dcm_list) // 2]
+        try:
+            img = load_pixel(mid)
+            ax.imshow(img, cmap="gray", aspect="auto")
+        except Exception as e:
+            ax.text(0.5, 0.5, f"Err\n{str(e)[:25]}",
+                    ha="center", va="center", color="white",
+                    fontsize=FONT_BASE - 5, transform=ax.transAxes)
 
-            # Spine colour from gradient
-            edge_clr = cmap_use(norm_val)
-            for sp in ax.spines.values():
-                sp.set_edgecolor(edge_clr)
+        # Row label only on leftmost column
+        if col_idx == 0:
+            ax.set_ylabel(row_label, color="white",
+                          fontsize=FONT_BASE + 1, fontweight="bold",
+                          rotation=90, labelpad=10)
 
-            if mid:
-                try:
-                    img = load_pixel(mid)
-                    ax.imshow(img, cmap="gray", aspect="auto")
-                except Exception as e:
-                    ax.text(0.5, 0.5, f"Err\n{str(e)[:30]}",
-                            ha="center", va="center", color="white",
-                            fontsize=FONT_BASE-4, wrap=True)
+    # Place HH images (row 0)
+    for col, row in enumerate(hh_picks):
+        case = int(row["Case No"])
+        dcms = hh_map.get(case, [])
+        if dcms:
+            place_image(0, col, dcms, anchor_bmis[col], "HH (Handheld)")
 
-            ax.set_xlabel(xlabel, color="white", fontsize=FONT_BASE,
-                          fontweight="bold", labelpad=8)
-            if col_i == 0:
-                ax.set_ylabel(row_title, color="white", fontsize=FONT_BASE+1,
-                              fontweight="bold", rotation=90, labelpad=10)
+    # Place SC images (row 1)
+    for col, row in enumerate(sc_picks):
+        case = int(row["Case No"])
+        dcms = sc_map.get(case, [])
+        if dcms:
+            place_image(1, col, dcms, anchor_bmis[col], "SC (Standard Care)")
 
-    fill_row(0, hh_picks, hh_map, "HH (Handheld)",       use_bmi=False)
-    fill_row(1, sc_picks,  sc_map,  "SC (Standard Care)", use_bmi=True)
+    # ── Shared BMI colorbar spanning all 5 columns (row 2) ───────────
+    cbar_ax = fig.add_subplot(gs[2, :])
+    sm = plt.cm.ScalarMappable(
+        cmap=bmi_cmap,
+        norm=plt.Normalize(vmin=bmi_min, vmax=bmi_max)
+    )
+    sm.set_array([])
+    cbar = fig.colorbar(sm, cax=cbar_ax, orientation="horizontal")
+    cbar.set_label("BMI  (kg/m²)", color="white",
+                   fontsize=FONT_BASE + 1, labelpad=8, fontweight="bold")
+    cbar.ax.xaxis.set_tick_params(color="white")
+    plt.setp(cbar.ax.xaxis.get_ticklabels(), color="white", fontsize=FONT_BASE - 1)
+    cbar.outline.set_edgecolor("white")
 
-    # Legend colorbars
-    axes_all = fig.axes
-    # BMI bar (bottom row)
-    sm_bmi = plt.cm.ScalarMappable(cmap=bmi_cmap, norm=plt.Normalize(16, 50))
-    sm_bmi.set_array([])
-    sm_age = plt.cm.ScalarMappable(cmap=age_cmap, norm=plt.Normalize(18, 50))
-    sm_age.set_array([])
+    # Mark the 5 anchor BMI values on the colorbar
+    cbar.set_ticks(anchor_bmis)
+    cbar.set_ticklabels([f"{b:.1f}" for b in anchor_bmis])
+    plt.setp(cbar.ax.xaxis.get_ticklabels(), color="white",
+             fontsize=FONT_BASE, fontweight="bold")
 
-    # Add two colorbars side-by-side at bottom
-    cax_bmi = fig.add_axes([0.12, 0.04, 0.35, 0.025])
-    cax_age = fig.add_axes([0.55, 0.04, 0.35, 0.025])
-    cb_bmi = fig.colorbar(sm_bmi, cax=cax_bmi, orientation="horizontal")
-    cb_age = fig.colorbar(sm_age, cax=cax_age, orientation="horizontal")
+    # Vertical tick lines on colorbar to align with columns
+    for b in anchor_bmis:
+        cbar.ax.axvline(b, color="white", lw=1.5, alpha=0.7)
 
-    for cb, label in [(cb_bmi, "SC: BMI (kg/m²)"), (cb_age, "HH: Age (years)")]:
-        cb.set_label(label, color="white", fontsize=FONT_BASE, labelpad=5)
-        cb.ax.xaxis.set_tick_params(color="white")
-        plt.setp(cb.ax.xaxis.get_ticklabels(), color="white", fontsize=FONT_BASE-2)
-        cb.outline.set_edgecolor("white")
-
-    fig.suptitle("POCUS Image Gradient Across BMI / Age — HH (top) vs SC (bottom)",
-                 color="white", fontsize=FONT_BASE+4, fontweight="bold", y=0.96)
+    fig.suptitle(
+        "POCUS Image Quality Across BMI Range  —  HH (top)  vs  SC (bottom)",
+        color="white", fontsize=FONT_BASE + 4, fontweight="bold", y=0.96
+    )
     savefig("fig10_bmi_gradient_images.png")
 
 
