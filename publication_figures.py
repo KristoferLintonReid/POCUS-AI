@@ -925,8 +925,141 @@ def fig_correlation_scatterplots():
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  MAIN
+#  FIGURES 13 & 14 – Correlations stratified by BMI subgroup
+#  (Early Pregnancy, SC patients who had both HH & SC measurements)
+#  Overweight: BMI 25–29.9   |   Obese: BMI ≥ 30
 # ══════════════════════════════════════════════════════════════════════
+
+# All paired EP columns (HH col, SC col, readable label)
+_EP_PAIRS = [
+    ("HH MSD",      "MSD",              "MSD (mm)"),
+    ("HH R1",       "R1",               "R Ovary D1 (mm)"),
+    ("HH R2",       "R2",               "R Ovary D2 (mm)"),
+    ("HH R3",       "R3",               "R Ovary D3 (mm)"),
+    ("HH R OV VOL", "R Ov Vol",         "R Ovary Vol (cm³)"),
+    ("HH L1",       "L1",               "L Ovary D1 (mm)"),
+    ("HH L2",       "L2",               "L Ovary D2 (mm)"),
+    ("HH L3",       "L3",               "L Ovary D3 (mm)"),
+    ("HH L OV VOL", "L Ov Vol",         "L Ovary Vol (cm³)"),
+    ("HH ET",       "ET (if sac not seen)", "ET (mm)"),
+    ("HH PREGNANCY SITE", "Site of Prenancy", "Pregnancy Site"),
+    ("HH Diagnosis","Diagnosis",         "Diagnosis"),
+    ("HH Management","Management",       "Management"),
+    ("HH MSD",      "MSD",              "MSD (mm)"),   # duplicate guard handled below
+]
+# De-duplicate by hh_col
+_seen = set()
+_EP_PAIRS_DEDUPED = []
+for h, s, l in _EP_PAIRS:
+    if h not in _seen:
+        _EP_PAIRS_DEDUPED.append((h, s, l))
+        _seen.add(h)
+
+
+def _bmi_corr_figure(bmi_label: str, bmi_min: float, bmi_max: float,
+                     fig_num: int):
+    """Generic engine: filter EP patients by BMI, draw correlation panels."""
+    from scipy.stats import pearsonr, linregress
+
+    df = pd.read_excel(EP_SHEET)
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Filter by BMI range
+    mask = (df["BMI"] >= bmi_min) & (df["BMI"] < bmi_max)
+    sub = df[mask].reset_index(drop=True)
+    n_patients = len(sub)
+    bmi_stats = f"n={n_patients}  BMI {sub['BMI'].mean():.1f}±{sub['BMI'].std():.1f}"
+
+    # Build valid pairs
+    valid = []
+    for hh_col, sc_col, label in _EP_PAIRS_DEDUPED:
+        if hh_col not in sub.columns or sc_col not in sub.columns:
+            continue
+        paired = sub[[hh_col, sc_col]].dropna()
+        if len(paired) >= 5:
+            valid.append((label, sub[hh_col], sub[sc_col]))
+
+    if not valid:
+        print(f"  ⚠  No valid pairs for {bmi_label} subgroup – skipping.")
+        return
+
+    ncols = 4
+    nrows = int(np.ceil(len(valid) / ncols))
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(6.5 * ncols, 6.5 * nrows))
+    axes = axes.flatten()
+
+    bmi_clr = "#f59e0b" if bmi_min < 30 else "#dc2626"   # amber=overweight, red=obese
+
+    for i, (label, hh_v, sc_v) in enumerate(valid):
+        ax = axes[i]
+        paired = pd.concat([hh_v.rename("hh"), sc_v.rename("sc")],
+                           axis=1).dropna()
+        n = len(paired)
+        r, p = pearsonr(paired["hh"], paired["sc"])
+        slope, intercept, *_ = linregress(paired["hh"], paired["sc"])
+        xs  = np.linspace(paired["hh"].min(), paired["hh"].max(), 200)
+
+        ax.scatter(paired["hh"], paired["sc"],
+                   color=bmi_clr, alpha=0.60, s=22, edgecolors="none")
+        ax.plot(xs, slope * xs + intercept,
+                color="black", lw=2, label="Regression")
+        lo = min(paired["hh"].min(), paired["sc"].min())
+        hi = max(paired["hh"].max(), paired["sc"].max())
+        ax.plot([lo, hi], [lo, hi], "--", color="#94a3b8", lw=1.5,
+                label="Identity (HH = SC)")
+
+        sig = ("***" if p < 0.001 else
+               "**"  if p < 0.01  else
+               "*"   if p < 0.05  else "ns")
+        ax.text(0.05, 0.93,
+                f"r = {r:.2f} {sig}\nn = {n}",
+                transform=ax.transAxes, fontsize=FONT_BASE-2,
+                va="top", ha="left",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                          alpha=0.80, ec="#cbd5e1"))
+
+        ax.set_xlabel(f"HH — {label}", fontsize=FONT_BASE-1, labelpad=6)
+        ax.set_ylabel(f"SC — {label}",  fontsize=FONT_BASE-1, labelpad=6)
+        ax.set_title(label, fontweight="bold", pad=10, fontsize=FONT_BASE)
+        ax.tick_params(labelsize=FONT_BASE-2)
+
+    # Hide empty panels
+    for j in range(i + 1, len(axes)):
+        axes[j].set_visible(False)
+
+    # Shared legend
+    from matplotlib.lines import Line2D
+    leg_els = [
+        Line2D([0],[0], marker="o", color="w", markerfacecolor=bmi_clr,
+               markersize=11, label=f"{bmi_label} patients"),
+        Line2D([0],[0], color="black",   lw=2,          label="Regression"),
+        Line2D([0],[0], color="#94a3b8", lw=1.5, ls="--", label="Identity"),
+    ]
+    fig.legend(handles=leg_els, loc="upper right",
+               bbox_to_anchor=(0.99, 0.99), fontsize=FONT_BASE-1,
+               framealpha=0.9)
+
+    fig.suptitle(
+        f"Fig {fig_num}: Correlation HH vs SC — {bmi_label} Patients\n"
+        f"(Early Pregnancy, {bmi_stats})",
+        fontsize=FONT_BASE+4, fontweight="bold"
+    )
+    fig.subplots_adjust(hspace=0.52, wspace=0.40, top=0.88)
+    savefig(f"fig{fig_num}_corr_{bmi_label.lower().replace(' ', '_')}.png")
+
+
+def fig_corr_overweight():
+    """Figure 13 — Correlations for overweight patients (BMI 25–29.9)."""
+    _bmi_corr_figure("Overweight (BMI 25–29.9)", 25.0, 30.0, 13)
+
+
+def fig_corr_obese():
+    """Figure 14 — Correlations for obese patients (BMI ≥ 30)."""
+    _bmi_corr_figure("Obese (BMI ≥30)", 30.0, 999.0, 14)
+
+
 if __name__ == "__main__":
     print(f"\nPOCUS-AI Publication Figures  →  {FIG_DIR}\n")
     np.random.seed(42)
@@ -953,8 +1086,12 @@ if __name__ == "__main__":
     fig_bmi_gradient()
     print("Figure 11 – EP cyst metrics")
     fig_ep_cyst()
-    print("Figure 12 – Correlation scatterplots")
+    print("Figure 12 – Correlation scatterplots (all patients)")
     fig_correlation_scatterplots()
+    print("Figure 13 – Correlations: Overweight (BMI 25–29.9)")
+    fig_corr_overweight()
+    print("Figure 14 – Correlations: Obese (BMI ≥30)")
+    fig_corr_obese()
 
     print(f"\n✓ All figures saved to: {FIG_DIR}\n")
 
