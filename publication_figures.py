@@ -61,6 +61,9 @@ plt.rcParams.update({
     "axes.grid":          True,
     "grid.alpha":         0.25,
     "grid.linewidth":     0.8,
+    # Prevent tick label / title overlap
+    "axes.titlepad":      10,
+    "figure.autolayout":  False,
 })
 
 HH_PATCH = mpatches.Patch(color=HH_CLR, label="HH (Handheld POCUS)")
@@ -69,6 +72,13 @@ SC_PATCH  = mpatches.Patch(color=SC_CLR,  label="SC (Standard Care)")
 
 def savefig(name):
     path = os.path.join(FIG_DIR, name)
+    # Use constrained_layout before saving for clean spacing
+    for fig in map(plt.figure, plt.get_fignums()):
+        try:
+            fig.set_constrained_layout(True)
+            fig.set_constrained_layout_pads(w_pad=0.08, h_pad=0.10, hspace=0.08, wspace=0.08)
+        except Exception:
+            pass
     plt.savefig(path, dpi=DPI, bbox_inches="tight")
     plt.close("all")
     print(f"  ✓ {name}")
@@ -136,18 +146,20 @@ def fig_ep_binary():
 
     x     = np.arange(len(labels))
     width = 0.35
-    fig, ax = plt.subplots(figsize=(14, 6))
-    b1 = ax.bar(x - width/2, hh_rates, width, color=HH_CLR, alpha=ALPHA, label="HH")
-    b2 = ax.bar(x + width/2, sc_rates,  width, color=SC_CLR,  alpha=ALPHA, label="SC")
-    ax.set_xticks(x); ax.set_xticklabels(labels, rotation=25, ha="right")
-    ax.set_ylabel("Detection Rate (%)")
-    ax.set_title("Early Pregnancy: Structure Detection Rates — HH vs SC", fontweight="bold", pad=14)
-    ax.set_ylim(0, 115)
-    for xi, sig in zip(x, sigs):
-        y = max(hh_rates[xi], sc_rates[xi]) + 3
-        ax.text(xi, y, sig, ha="center", va="bottom", fontsize=FONT_BASE-2, fontweight="bold")
-    ax.legend(handles=[HH_PATCH, SC_PATCH], loc="lower right")
-    fig.tight_layout()
+    fig, ax = plt.subplots(figsize=(15, 7))
+    ax.bar(x - width/2, hh_rates, width, color=HH_CLR, alpha=ALPHA, label="HH")
+    ax.bar(x + width/2, sc_rates,  width, color=SC_CLR,  alpha=ALPHA, label="SC")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=FONT_BASE)
+    ax.set_ylabel("Detection Rate (%)", labelpad=10)
+    ax.set_title("Early Pregnancy: Structure Detection Rates — HH vs SC",
+                 fontweight="bold", pad=16)
+    ax.set_ylim(0, 120)
+    for xi, (sig, hr, sr) in enumerate(zip(sigs, hh_rates, sc_rates)):
+        y = max(hr, sr) + 4
+        ax.text(xi, y, sig, ha="center", va="bottom", fontsize=FONT_BASE-1, fontweight="bold")
+    ax.legend(handles=[HH_PATCH, SC_PATCH], loc="lower right", fontsize=FONT_BASE-1)
+    fig.subplots_adjust(bottom=0.18)
     savefig("fig1_ep_detection_rates.png")
 
 
@@ -174,7 +186,7 @@ def fig_ep_continuous():
     valid = [(l, h, s) for l, h, s in pairs if h in df.columns and s in df.columns]
     ncols = 5
     nrows = int(np.ceil(len(valid) / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(22, 5.5 * nrows))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(24, 7 * nrows))
     axes = axes.flatten()
 
     for i, (label, hh_col, sc_col) in enumerate(valid):
@@ -188,9 +200,10 @@ def fig_ep_continuous():
         ax.axvline(hh_v.mean(), color=HH_CLR, lw=2, linestyle="--")
         ax.axvline(sc_v.mean(), color=SC_CLR,  lw=2, linestyle="--")
         sig = mwu_label(hh_v, sc_v)
-        ax.set_title(f"{label}  {sig}", fontsize=FONT_BASE)
-        ax.set_xlabel(label)
-        ax.set_ylabel("Density")
+        ax.set_title(f"{label}\n{sig}", fontsize=FONT_BASE, pad=8)
+        ax.set_xlabel(label, fontsize=FONT_BASE-1)
+        ax.set_ylabel("Density", fontsize=FONT_BASE-1)
+        ax.tick_params(labelsize=FONT_BASE-2)
 
     for j in range(i+1, len(axes)):
         axes[j].set_visible(False)
@@ -198,8 +211,8 @@ def fig_ep_continuous():
     fig.legend(handles=[HH_PATCH, SC_PATCH], loc="lower right",
                bbox_to_anchor=(0.98, 0.02), fontsize=FONT_BASE)
     fig.suptitle("Early Pregnancy: Continuous Measurements — HH vs SC",
-                 fontsize=FONT_BASE+4, fontweight="bold", y=1.01)
-    fig.tight_layout()
+                 fontsize=FONT_BASE+4, fontweight="bold")
+    fig.subplots_adjust(hspace=0.55, wspace=0.38, top=0.88)
     savefig("fig2_ep_continuous_measurements.png")
 
 
@@ -570,13 +583,13 @@ def fig_bmi_gradient():
         return
 
     df_ep = pd.read_excel(EP_SHEET)
-    df_ep["BMI"] = pd.to_numeric(df_ep["BMI"], errors="coerce")
+    df_ep["BMI"]    = pd.to_numeric(df_ep["BMI"],    errors="coerce")
+    df_ep["Age"]    = pd.to_numeric(df_ep["Age"],    errors="coerce")
     df_ep["Case No"] = pd.to_numeric(df_ep["Case No"], errors="coerce")
 
-    # Build map: case number → folder in EP_IMG
-    # HH folders: PG1, PG2, … SC folders: QI 194, QI 195, …
-    hh_map = {}  # case_no → folder path
-    sc_map = {}
+    # Build case → DICOM list maps
+    # HH: PG1-PG10, SC: QI 194 etc.
+    hh_map, sc_map = {}, {}
     if os.path.isdir(EP_IMG):
         for fld in sorted(os.listdir(EP_IMG)):
             full = os.path.join(EP_IMG, fld)
@@ -586,90 +599,132 @@ def fig_bmi_gradient():
             if not dcms:
                 continue
             if fld.startswith("PG"):
-                try: case = int(fld[2:])
-                except ValueError: continue
-                hh_map[case] = dcms
+                try: hh_map[int(fld[2:])] = dcms
+                except ValueError: pass
             elif fld.startswith("QI"):
-                try: case = int(fld.split()[1])
-                except (ValueError, IndexError): continue
-                sc_map[case] = dcms
+                try: sc_map[int(fld.split()[1])] = dcms
+                except (ValueError, IndexError): pass
 
-    # Sort EP patients by BMI; pick 5 evenly spaced across BMI range
-    valid_bmi = df_ep[df_ep["BMI"].notna()].sort_values("BMI")
+    # ── HH picks: BMI missing for PG cases → sort by Age instead ──
+    hh_df = df_ep[df_ep["Case No"].isin(hh_map.keys())].copy()
+    hh_df["sort_key"] = hh_df["BMI"].fillna(hh_df["Age"])   # use BMI else Age
+    hh_df = hh_df.sort_values("sort_key").reset_index(drop=True)
+    # pick 5 evenly spaced
+    n = len(hh_df)
+    hh_idx = [int(round(i)) for i in np.linspace(0, n-1, min(5, n))]
+    hh_picks = []
+    for i in hh_idx:
+        row = hh_df.iloc[i]
+        bmi_val  = row["BMI"]  if pd.notna(row["BMI"])  else np.nan
+        age_val  = row["Age"]  if pd.notna(row["Age"])  else np.nan
+        hh_picks.append((int(row["Case No"]), bmi_val, age_val))
 
-    def pick_5(case_map):
-        available = valid_bmi[valid_bmi["Case No"].isin(case_map.keys())]
-        if available.empty:
-            return []
-        n = len(available)
-        indices = [int(round(i)) for i in np.linspace(0, n-1, min(5, n))]
-        return available.iloc[indices][["Case No", "BMI"]].values.tolist()
+    # ── SC picks: sorted by BMI ──
+    sc_df = df_ep[df_ep["Case No"].isin(sc_map.keys()) & df_ep["BMI"].notna()].sort_values("BMI")
+    n = len(sc_df)
+    sc_idx  = [int(round(i)) for i in np.linspace(0, n-1, min(5, n))]
+    sc_picks = [(int(sc_df.iloc[i]["Case No"]), sc_df.iloc[i]["BMI"], sc_df.iloc[i]["Age"])
+                for i in sc_idx]
 
-    hh_picks = pick_5(hh_map)
-    sc_picks  = pick_5(sc_map)
+    n_cols = 5   # always 5 columns
+    if not hh_picks and not sc_picks:
+        print("  ⚠  No DICOM images found – skipping BMI gradient figure.")
+        return
 
     def load_pixel(dcm_path):
         ds = pydicom.dcmread(dcm_path, force=True)
         arr = ds.pixel_array.astype(float)
         if arr.ndim == 3:
             arr = arr[..., 0]
-        arr = (arr - arr.min()) / (arr.max() - arr.min() + 1e-9)
-        return arr
+        return (arr - arr.min()) / (arr.max() - arr.min() + 1e-9)
 
-    n_cols = max(len(hh_picks), len(sc_picks))
-    if n_cols == 0:
-        print("  ⚠  No DICOM images found – skipping BMI gradient figure.")
-        return
-
-    # Define a subtle warm gradient colormap for BMI axis
+    # BMI colormap: cool-blue (low) → warm-red (high)
     bmi_cmap = LinearSegmentedColormap.from_list(
         "bmi", ["#bfdbfe", "#1d4ed8", "#7f1d1d"], N=256)
+    age_cmap = LinearSegmentedColormap.from_list(
+        "age", ["#d1fae5", "#065f46", "#1e1b4b"], N=256)
 
-    fig = plt.figure(figsize=(4 * n_cols + 1, 10))
+    n_rows = 2   # HH top, SC bottom
+    fig = plt.figure(figsize=(4.2 * n_cols + 1, 5 * n_rows + 2))
     fig.patch.set_facecolor("#0f172a")
-    outer = gridspec.GridSpec(2, 1, figure=fig, hspace=0.12)
+    outer = gridspec.GridSpec(n_rows, 1, figure=fig, hspace=0.22,
+                              top=0.88, bottom=0.12)
 
-    def fill_row(row_idx, picks, case_map, row_title):
+    def fill_row(row_idx, picks, case_map, row_title, use_bmi):
         inner = gridspec.GridSpecFromSubplotSpec(
-            1, n_cols, subplot_spec=outer[row_idx], wspace=0.05)
-        for col_i, (case, bmi) in enumerate(picks):
+            1, n_cols, subplot_spec=outer[row_idx], wspace=0.06)
+        for col_i in range(n_cols):
             ax = fig.add_subplot(inner[col_i])
-            dcm_path = case_map[int(case)][len(case_map[int(case)])//2]
-            try:
-                img = load_pixel(dcm_path)
-                bmi_norm = min((bmi - 16) / (50 - 16), 1.0)
-                ax.imshow(img, cmap="gray", aspect="auto")
-                for spine in ax.spines.values():
-                    spine.set_edgecolor(bmi_cmap(bmi_norm))
-                    spine.set_linewidth(4)
-            except Exception as e:
-                ax.text(0.5, 0.5, f"Error\n{e}", ha="center", va="center",
-                        color="white", fontsize=10)
-                ax.set_facecolor("black")
+            ax.set_facecolor("#0f172a")
             ax.set_xticks([]); ax.set_yticks([])
-            ax.set_xlabel(f"BMI {bmi:.1f}", color="white", fontsize=FONT_BASE,
-                          fontweight="bold", labelpad=6)
+            for sp in ax.spines.values():
+                sp.set_visible(True)
+                sp.set_linewidth(3)
+
+            if col_i >= len(picks):
+                # empty slot
+                ax.text(0.5, 0.5, "N/A", ha="center", va="center",
+                        color="#64748b", fontsize=FONT_BASE)
+                continue
+
+            case, bmi, age = picks[col_i]
+            dcms = case_map.get(int(case), [])
+            mid  = dcms[len(dcms)//2] if dcms else None
+
+            if use_bmi and pd.notna(bmi):
+                cmap_use = bmi_cmap
+                norm_val = min((bmi - 16) / (50 - 16), 1.0)
+                xlabel   = f"BMI {bmi:.1f}"
+            else:
+                cmap_use = age_cmap
+                norm_val = min((age - 18) / (50 - 18), 1.0) if pd.notna(age) else 0.5
+                xlabel   = f"Age {int(age)}\n(BMI N/A)" if pd.notna(age) else "N/A"
+
+            # Spine colour from gradient
+            edge_clr = cmap_use(norm_val)
+            for sp in ax.spines.values():
+                sp.set_edgecolor(edge_clr)
+
+            if mid:
+                try:
+                    img = load_pixel(mid)
+                    ax.imshow(img, cmap="gray", aspect="auto")
+                except Exception as e:
+                    ax.text(0.5, 0.5, f"Err\n{str(e)[:30]}",
+                            ha="center", va="center", color="white",
+                            fontsize=FONT_BASE-4, wrap=True)
+
+            ax.set_xlabel(xlabel, color="white", fontsize=FONT_BASE,
+                          fontweight="bold", labelpad=8)
             if col_i == 0:
                 ax.set_ylabel(row_title, color="white", fontsize=FONT_BASE+1,
-                              fontweight="bold", rotation=90, labelpad=8)
+                              fontweight="bold", rotation=90, labelpad=10)
 
-    if hh_picks:
-        fill_row(0, hh_picks, hh_map, "HH (Handheld)")
-    if sc_picks:
-        fill_row(1, sc_picks, sc_map,  "SC (Standard Care)")
+    fill_row(0, hh_picks, hh_map, "HH (Handheld)",       use_bmi=False)
+    fill_row(1, sc_picks,  sc_map,  "SC (Standard Care)", use_bmi=True)
 
-    # Colorbar for BMI gradient
-    sm = plt.cm.ScalarMappable(cmap=bmi_cmap, norm=plt.Normalize(vmin=16, vmax=50))
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=fig.axes, orientation="horizontal",
-                        fraction=0.03, pad=0.06, shrink=0.6)
-    cbar.set_label("BMI (kg/m²)", color="white", fontsize=FONT_BASE, labelpad=6)
-    cbar.ax.xaxis.set_tick_params(color="white")
-    plt.setp(cbar.ax.xaxis.get_ticklabels(), color="white", fontsize=FONT_BASE-1)
-    cbar.outline.set_edgecolor("white")
+    # Legend colorbars
+    axes_all = fig.axes
+    # BMI bar (bottom row)
+    sm_bmi = plt.cm.ScalarMappable(cmap=bmi_cmap, norm=plt.Normalize(16, 50))
+    sm_bmi.set_array([])
+    sm_age = plt.cm.ScalarMappable(cmap=age_cmap, norm=plt.Normalize(18, 50))
+    sm_age.set_array([])
 
-    fig.suptitle("POCUS Image Quality Across BMI Range — HH vs SC",
-                 color="white", fontsize=FONT_BASE+5, fontweight="bold", y=1.01)
+    # Add two colorbars side-by-side at bottom
+    cax_bmi = fig.add_axes([0.12, 0.04, 0.35, 0.025])
+    cax_age = fig.add_axes([0.55, 0.04, 0.35, 0.025])
+    cb_bmi = fig.colorbar(sm_bmi, cax=cax_bmi, orientation="horizontal")
+    cb_age = fig.colorbar(sm_age, cax=cax_age, orientation="horizontal")
+
+    for cb, label in [(cb_bmi, "SC: BMI (kg/m²)"), (cb_age, "HH: Age (years)")]:
+        cb.set_label(label, color="white", fontsize=FONT_BASE, labelpad=5)
+        cb.ax.xaxis.set_tick_params(color="white")
+        plt.setp(cb.ax.xaxis.get_ticklabels(), color="white", fontsize=FONT_BASE-2)
+        cb.outline.set_edgecolor("white")
+
+    fig.suptitle("POCUS Image Gradient Across BMI / Age — HH (top) vs SC (bottom)",
+                 color="white", fontsize=FONT_BASE+4, fontweight="bold", y=0.96)
     savefig("fig10_bmi_gradient_images.png")
 
 
@@ -742,6 +797,134 @@ def fig_ep_cyst():
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  FIGURE 12 – Correlation Scatterplots: HH vs SC paired measurements
+# ══════════════════════════════════════════════════════════════════════
+def fig_correlation_scatterplots():
+    """Paired HH vs SC scatterplots with Pearson r and regression line."""
+    from scipy.stats import pearsonr, linregress
+
+    # ─ Gynaecology pairs (well-paired, same patient) ─────────────────────
+    df_gy = pd.read_excel(GY_SHEET)
+    for col in df_gy.columns:
+        df_gy[col] = pd.to_numeric(df_gy[col], errors="coerce")
+
+    gy_pairs = [
+        ("Endometrial Thickness (mm)",
+         "HANDHELDEndometrialthickness",    "STANDARDCAREEndometrialthickness"),
+        ("Uterus Longitudinal (mm)",
+         "HANDHELDUterinedimensionsLONGITUDINAL", "STANDARDCAREUterinedimensionsLONGITUDINAL"),
+        ("Uterus AP (mm)",
+         "HANDHELDUterinedimensionsAP",      "STANDARDCAREUterinedimensionsAP"),
+        ("Uterus Transverse (mm)",
+         "HANDHELDUterinedimensionsTransverse", "STANDARDCAREUterinedimensionsTransverse"),
+        ("Max Cyst Diameter (mm)",
+         "HANDHELDMaxCystDiameter",          "STANDcystmaxdiameter"),
+        ("Colour Score",
+         "HANDHELDColourscore",              "STANDARDCAREColourscore"),
+        ("Subjective Assessment",
+         "HANDHELDSubjectiveassessment",     "STANDARDCARESubjectiveassessment"),
+        ("Characterisation",
+         "HANDHELDCharacterisation",         "STANDARDCARECharacterisation"),
+    ]
+
+    # ─ Early Pregnancy pairs ──────────────────────────────────────
+    df_ep = pd.read_excel(EP_SHEET)
+    for col in df_ep.columns:
+        df_ep[col] = pd.to_numeric(df_ep[col], errors="coerce")
+
+    ep_pairs = [
+        ("MSD (mm)",            "HH MSD",       "MSD"),
+        ("R Ovary D1 (mm)",     "HH R1",        "R1"),
+        ("R Ovary D2 (mm)",     "HH R2",        "R2"),
+        ("R Ovary D3 (mm)",     "HH R3",        "R3"),
+        ("R Ovary Vol (cm³)",   "HH R OV VOL",  "R Ov Vol"),
+        ("L Ovary D1 (mm)",     "HH L1",        "L1"),
+        ("L Ovary Vol (cm³)",   "HH L OV VOL",  "L Ov Vol"),
+    ]
+
+    def scatter_panel(ax, hh_v, sc_v, label, color_pt, dataset_tag):
+        """Draw scatter with regression line and annotate r."""
+        paired = pd.concat([hh_v.rename("hh"), sc_v.rename("sc")],
+                           axis=1).dropna()
+        if len(paired) < 5:
+            ax.text(0.5, 0.5, "Insufficient data",
+                    ha="center", va="center", transform=ax.transAxes,
+                    fontsize=FONT_BASE-2)
+            ax.set_title(label, fontweight="bold", pad=8)
+            return
+
+        r, p = pearsonr(paired["hh"], paired["sc"])
+        slope, intercept, *_ = linregress(paired["hh"], paired["sc"])
+        xs = np.linspace(paired["hh"].min(), paired["hh"].max(), 200)
+
+        ax.scatter(paired["hh"], paired["sc"], color=color_pt,
+                   alpha=0.55, s=20, edgecolors="none")
+        ax.plot(xs, slope*xs + intercept, color="black", lw=2, label="Regression")
+        # Identity line
+        lo = min(paired["hh"].min(), paired["sc"].min())
+        hi = max(paired["hh"].max(), paired["sc"].max())
+        ax.plot([lo, hi], [lo, hi], "--", color="#94a3b8", lw=1.5, label="Identity")
+
+        # Annotate r in top-left corner – use text transform to avoid overflow
+        sig = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "ns"))
+        ax.text(0.05, 0.93,
+                f"r = {r:.2f} {sig}\nn = {len(paired)}",
+                transform=ax.transAxes, fontsize=FONT_BASE-2,
+                va="top", ha="left",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7, ec="#cbd5e1"))
+
+        ax.set_xlabel(f"HH {label}", fontsize=FONT_BASE-1, labelpad=6)
+        ax.set_ylabel(f"SC {label}", fontsize=FONT_BASE-1, labelpad=6)
+        ax.set_title(f"{dataset_tag}: {label}", fontweight="bold", pad=10)
+        ax.tick_params(labelsize=FONT_BASE-2)
+
+    # ─ Build figure ─────────────────────────────────────────────
+    valid_gy = [(l, h, s) for l, h, s in gy_pairs
+                if h in df_gy.columns and s in df_gy.columns
+                and df_gy[[h, s]].dropna().shape[0] >= 5]
+    valid_ep = [(l, h, s) for l, h, s in ep_pairs
+                if h in df_ep.columns and s in df_ep.columns
+                and df_ep[[h, s]].dropna().shape[0] >= 5]
+
+    all_pairs = [(l, df_gy[h], df_gy[s], "#059669", "Gynae")
+                 for l, h, s in valid_gy] + \
+                [(l, df_ep[h], df_ep[s], "#7C3AED", "Early Preg")
+                 for l, h, s in valid_ep]
+
+    ncols = 4
+    nrows = int(np.ceil(len(all_pairs) / ncols))
+    fig, axes = plt.subplots(nrows, ncols,
+                              figsize=(6.5 * ncols, 6.5 * nrows))
+    axes = axes.flatten()
+
+    for i, (label, hh_v, sc_v, clr, tag) in enumerate(all_pairs):
+        scatter_panel(axes[i], hh_v, sc_v, label, clr, tag)
+
+    # Hide unused panels
+    for j in range(i+1, len(axes)):
+        axes[j].set_visible(False)
+
+    # Shared legend
+    from matplotlib.lines import Line2D
+    legend_els = [
+        Line2D([0],[0], marker="o", color="w", markerfacecolor="#059669",
+               markersize=10, label="Gynaecology"),
+        Line2D([0],[0], marker="o", color="w", markerfacecolor="#7C3AED",
+               markersize=10, label="Early Pregnancy"),
+        Line2D([0],[0], color="black", lw=2,  label="Regression line"),
+        Line2D([0],[0], color="#94a3b8", lw=1.5, linestyle="--", label="Identity (HH = SC)"),
+    ]
+    fig.legend(handles=legend_els, loc="upper right",
+               bbox_to_anchor=(0.99, 0.99), fontsize=FONT_BASE-1,
+               framealpha=0.9)
+
+    fig.suptitle("Correlation: HH vs SC Paired Measurements (Pearson r)",
+                 fontsize=FONT_BASE+5, fontweight="bold")
+    fig.subplots_adjust(hspace=0.50, wspace=0.38, top=0.90)
+    savefig("fig12_correlation_scatterplots.png")
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
@@ -770,5 +953,8 @@ if __name__ == "__main__":
     fig_bmi_gradient()
     print("Figure 11 – EP cyst metrics")
     fig_ep_cyst()
+    print("Figure 12 – Correlation scatterplots")
+    fig_correlation_scatterplots()
 
     print(f"\n✓ All figures saved to: {FIG_DIR}\n")
+
