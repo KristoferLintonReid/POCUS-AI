@@ -171,20 +171,44 @@ def main():
         print("\nNo varying features for correlation analysis.")
         return
 
+    # 1. Bar plot of diagonal correlations (paired corresponding features)
     corr_series = pd.Series(corr_data).sort_values(ascending=False)
-    
-    # Generate Heatmap
     plt.figure(figsize=(10, 8))
-    sns.barplot(x=corr_series.values, y=corr_series.index, palette="viridis")
+    sns.barplot(x=corr_series.values, y=corr_series.index, palette="mako")
     plt.axvline(0, color='black', lw=1)
-    plt.title("Correlation: HH vs SC Image Features (Whole Image)", fontweight="bold")
+    plt.title("Correlation: HH vs SC Corresponding Features (Whole Image)", fontweight="bold")
     plt.xlabel("Pearson r")
     plt.tight_layout()
     plt.savefig(os.path.join(FIG_DIR, "radiomics_correlation_summary.png"), dpi=300)
     
+    # 2. Full Cross-Correlation Heatmap (HH features vs SC features)
+    # Extract just the feature columns for HH and SC
+    hh_cols = [c for c in df.columns if c.startswith("HH_") and c.replace("HH_", "") in corr_series.index]
+    sc_cols = [c for c in df.columns if c.startswith("SC_") and c.replace("SC_", "") in corr_series.index]
+    
+    # Compute the cross-correlation matrix (HH vs SC)
+    cross_corr = pd.DataFrame(index=[c.replace("HH_", "") for c in hh_cols], 
+                              columns=[c.replace("SC_", "") for c in sc_cols])
+    
+    for h_col in hh_cols:
+        for s_col in sc_cols:
+            r = df[[h_col, s_col]].dropna().corr().iloc[0, 1]
+            cross_corr.loc[h_col.replace("HH_", ""), s_col.replace("SC_", "")] = r
+            
+    cross_corr = cross_corr.astype(float)
+    
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(cross_corr, annot=True, fmt=".2f", cmap="coolwarm", center=0, 
+                cbar_kws={'label': 'Pearson r'})
+    plt.title("Cross-Correlation Heatmap: HH Features vs SC Features", fontweight="bold")
+    plt.xlabel("Standard Care (SC) Features")
+    plt.ylabel("Handheld (HH) Features")
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIG_DIR, "radiomics_heatmap.png"), dpi=300)
+    
     print("\nSummary of correlations:")
     print(corr_series.to_string())
-    print("\n✓ Analysis complete.")
+    print(f"\n✓ Analysis complete. Heatmap saved to {os.path.join(FIG_DIR, 'radiomics_heatmap.png')}")
 
 if __name__ == "__main__":
     main()
