@@ -653,24 +653,23 @@ def fig_bmi_gradient():
     def norm(b):
         return float(np.clip((b - bmi_lo) / (bmi_hi - bmi_lo), 0, 1))
 
-    # ── Figure layout ─────────────────────────────────────────────────
-    # 3 gridspec rows: HH images | SC images | colorbar
+    # ── Figure layout: GridSpec(2, N) + explicit axes for colorbar ──────
     fig_w = 3.8 * N + 1.4
-    fig_h = 5.2 * 2 + 1.6
+    fig_h = 5.2 * 2 + 1.8
     fig = plt.figure(figsize=(fig_w, fig_h))
     fig.patch.set_facecolor("#0f172a")
 
+    # Image grid: 2 rows × N cols — direct cell indexing, no nesting
     gs = gridspec.GridSpec(
-        3, N,
+        2, N,
         figure=fig,
-        height_ratios=[1, 1, 0.09],
-        hspace=0.12, wspace=0.05,
-        top=0.88, bottom=0.10,
+        hspace=0.06, wspace=0.05,
+        top=0.88, bottom=0.18,
         left=0.07, right=0.97,
     )
 
-    def draw_cell(row_gs, col, dcm_list, bmi_anchor, row_label):
-        ax = fig.add_subplot(row_gs[col])
+    def draw_cell(row_i, col_i, dcm_list, bmi_anchor, row_label):
+        ax = fig.add_subplot(gs[row_i, col_i])   # direct — no nesting
         ax.set_facecolor("#0f172a")
         ax.set_xticks([]); ax.set_yticks([])
 
@@ -684,35 +683,29 @@ def fig_bmi_gradient():
         try:
             ax.imshow(load_pixel(dcm), cmap="gray", aspect="auto")
         except Exception:
-            ax.set_facecolor("#1e293b")   # dark fallback — no text
+            ax.set_facecolor("#1e293b")
 
-        if col == 0:
+        if col_i == 0:
             ax.set_ylabel(row_label, color="white",
                           fontsize=FONT_BASE + 1, fontweight="bold",
                           rotation=90, labelpad=12)
 
-    # HH row (row 0)
-    hh_inner = gridspec.GridSpecFromSubplotSpec(1, N, subplot_spec=gs[0, :],
-                                                wspace=0.05)
+    # HH images — row 0
     for col_i, pick in enumerate(hh_picks):
         case = int(pick["Case No"])
         if case in hh_map:
-            draw_cell(hh_inner, col_i, hh_map[case], anchor_bmis[col_i],
-                      "HH (Handheld)")
+            draw_cell(0, col_i, hh_map[case], anchor_bmis[col_i], "HH (Handheld)")
 
-    # SC row (row 1)
-    sc_inner = gridspec.GridSpecFromSubplotSpec(1, N, subplot_spec=gs[1, :],
-                                                wspace=0.05)
+    # SC images — row 1
     for col_i, pick in enumerate(sc_picks):
         case = int(pick["Case No"])
         if case in sc_map:
-            draw_cell(sc_inner, col_i, sc_map[case], anchor_bmis[col_i],
-                      "SC (Standard Care)")
+            draw_cell(1, col_i, sc_map[case], anchor_bmis[col_i], "SC (Standard Care)")
 
-    # ── Shared BMI colorbar as x-axis ─────────────────────────────────
-    cax = fig.add_subplot(gs[2, :])
-    sm = plt.cm.ScalarMappable(cmap=bmi_cmap,
-                               norm=plt.Normalize(vmin=bmi_lo, vmax=bmi_hi))
+    # ── Shared BMI colorbar: placed with fig.add_axes (no gridspec conflict) ──
+    cax = fig.add_axes([0.07, 0.07, 0.90, 0.040])
+    sm  = plt.cm.ScalarMappable(
+        cmap=bmi_cmap, norm=plt.Normalize(vmin=bmi_lo, vmax=bmi_hi))
     sm.set_array([])
     cbar = fig.colorbar(sm, cax=cax, orientation="horizontal")
     cbar.set_ticks(anchor_bmis)
@@ -723,12 +716,12 @@ def fig_bmi_gradient():
     plt.setp(cax.xaxis.get_ticklabels(), color="white",
              fontsize=FONT_BASE, fontweight="bold")
     cax.tick_params(colors="white")
-    for b in anchor_bmis:        # vertical markers align with each column
+    for b in anchor_bmis:
         cax.axvline(b, color="white", lw=1.8, alpha=0.6)
 
     fig.suptitle(
         "POCUS Image Quality Across BMI Range  —  HH (top) vs SC (bottom)",
-        color="white", fontsize=FONT_BASE + 4, fontweight="bold", y=0.95,
+        color="white", fontsize=FONT_BASE + 4, fontweight="bold", y=0.96,
     )
     savefig("fig10_bmi_gradient_images.png")
 # ══════════════════════════════════════════════════════════════════════
