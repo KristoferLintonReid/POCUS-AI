@@ -186,7 +186,7 @@ def fig_ep_continuous():
     valid = [(l, h, s) for l, h, s in pairs if h in df.columns and s in df.columns]
     ncols = 5
     nrows = int(np.ceil(len(valid) / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(24, 7 * nrows))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(24, 8 * nrows), constrained_layout=True)
     axes = axes.flatten()
 
     for i, (label, hh_col, sc_col) in enumerate(valid):
@@ -209,10 +209,10 @@ def fig_ep_continuous():
         axes[j].set_visible(False)
 
     fig.legend(handles=[HH_PATCH, SC_PATCH], loc="lower right",
-               bbox_to_anchor=(0.98, 0.02), fontsize=FONT_BASE)
+               bbox_to_anchor=(0.98, 0.05), fontsize=FONT_BASE)
     fig.suptitle("Early Pregnancy: Continuous Measurements — HH vs SC",
-                 fontsize=FONT_BASE+4, fontweight="bold")
-    fig.subplots_adjust(hspace=0.55, wspace=0.38, top=0.88)
+                 fontsize=FONT_BASE+4, fontweight="bold", y=0.98)
+    # subplots_adjust is ignored when constrained_layout=True
     savefig("fig2_ep_continuous_measurements.png")
 
 
