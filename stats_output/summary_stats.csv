@@ -1,0 +1,4 @@
+Dataset,Scan Type,Patients (folders),Total DICOM images,Mean images/patient
+Early Pregnancy,HH (Handheld),10,106,10.6
+Early Pregnancy,SC (Standard Care),21,178,8.5
+Gynaecology,SC (Standard Care),0,0,n/a
