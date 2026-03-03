@@ -577,11 +577,10 @@ def fig_demographics():
 def fig_bmi_gradient():
     """
     BMI gradient: 2 rows × 5 columns.
-    - Case number extracted from folder name by stripping all non-digit chars.
-    - SC row: 5 patients with real BMI, evenly spaced across BMI range.
-    - HH row: 5 PG patients sorted by Age, displayed at same column positions.
-    - Single shared BMI colorbar = coherent x-axis for both rows.
-    - Zero 'N/A' or text labels on individual images.
+    Top row: Handheld (HH) images.
+    Bottom row: Standard Care (SC) images.
+    Each column is a paired comparison for the same patient.
+    Cases: 202, 219, 197, 196, 211 (ordered by BMI).
     """
     import re as _re
     try:
@@ -592,58 +591,61 @@ def fig_bmi_gradient():
 
     df = pd.read_excel(EP_SHEET)
     df["BMI"]     = pd.to_numeric(df["BMI"],     errors="coerce")
-    df["Age"]     = pd.to_numeric(df["Age"],     errors="coerce")
     df["Case No"] = pd.to_numeric(df["Case No"], errors="coerce")
 
-    # ── Robust folder → case number mapping (strip everything except digits) ──
-    hh_map, sc_map = {}, {}          # case_no (int) → sorted list of .dcm paths
-    if os.path.isdir(EP_IMG):
-        for fld in sorted(os.listdir(EP_IMG)):
-            full = os.path.join(EP_IMG, fld)
-            if not os.path.isdir(full):
-                continue
-            m = _re.search(r"\d+", fld)
-            if not m:
-                continue
-            case_no = int(m.group())
-            dcms = sorted(glob.glob(os.path.join(full, "*.dcm")))
-            if not dcms:
-                continue
-            if fld.upper().startswith("PG"):
-                hh_map[case_no] = dcms        # HH: PG1 → case 1
-            elif fld.upper().startswith("QI"):
-                sc_map[case_no] = dcms        # SC: QI 194 → case 194
-
-    if not sc_map:
-        print("  ⚠  No SC DICOM images found – skipping fig10.")
+    # Target cases identified as having paired HH/SC and BMI
+    target_cases = [202, 219, 197, 196, 211]
+    picks_df = df[df["Case No"].isin(target_cases)].sort_values("BMI").reset_index(drop=True)
+    N = len(picks_df)
+    if N == 0:
+        print("  ⚠  None of the target cases found in spreadsheet – skipping fig10.")
         return
 
-    # ── 5 SC anchor picks (real BMI, with images) ─────────────────────
-    N = 5
-    sc_df = (df[df["Case No"].isin(sc_map) & df["BMI"].notna()]
-               .sort_values("BMI").reset_index(drop=True))
-    if sc_df.empty:
-        print("  ⚠  No SC patients with BMI – skipping fig10.")
-        return
-
-    sc_idx   = [int(round(i)) for i in np.linspace(0, len(sc_df) - 1, N)]
-    sc_picks = [sc_df.iloc[i] for i in sc_idx]
-    anchor_bmis = np.array([r["BMI"] for r in sc_picks])
+    anchor_bmis = picks_df["BMI"].values
     bmi_lo, bmi_hi = anchor_bmis[0], anchor_bmis[-1]
 
-    # ── 5 HH picks (sorted by Age, displayed at same column positions) ─
-    hh_df = (df[df["Case No"].isin(hh_map)]
-               .sort_values("Age").reset_index(drop=True))
-    hh_idx   = ([int(round(i)) for i in np.linspace(0, len(hh_df) - 1, N)]
-                if not hh_df.empty else [])
-    hh_picks = [hh_df.iloc[i] for i in hh_idx]
+    # Map Case No to folder and images
+    paired_data = {} # case -> {"hh": path, "sc": path}
+    if os.path.isdir(EP_IMG):
+        for fld in os.listdir(EP_IMG):
+            full = os.path.join(EP_IMG, fld)
+            if not os.path.isdir(full): continue
+            m = _re.search(r"\d+", fld)
+            if not m: continue
+            case_no = int(m.group())
+            if case_no in target_cases:
+                files = os.listdir(full)
+                # HH images: start with HH, end with png/jpg/jpeg/dcm
+                hh_candidates = [os.path.join(full, f) for f in files 
+                                 if f.upper().startswith("HH") and f.lower().endswith(('.png', '.jpg', '.jpeg', '.dcm'))]
+                # SC images: start with SC, end with dcm
+                sc_candidates = [os.path.join(full, f) for f in files 
+                                 if f.upper().startswith("SC") and f.lower().endswith('.dcm')]
+                
+                if hh_candidates and sc_candidates:
+                    # Pick best representative images
+                    def pick_best(paths):
+                        for kw in ["uterus", "sac", "sagital", "embryo"]:
+                            for p in paths:
+                                if kw in os.path.basename(p).lower():
+                                    return p
+                        return paths[0]
+                    paired_data[case_no] = {
+                        "hh": pick_best(hh_candidates),
+                        "sc": pick_best(sc_candidates)
+                    }
 
-    # ── DICOM reader ───────────────────────────────────────────────────
+    # ── Image loader ──────────────────────────────────────────────────
     def load_pixel(path):
-        ds  = pydicom.dcmread(path, force=True)
-        arr = ds.pixel_array.astype(float)
-        if arr.ndim == 3:
-            arr = arr[..., 0]
+        if path.lower().endswith(('.png', '.jpg', '.jpeg')):
+            from PIL import Image
+            img = Image.open(path).convert('L')
+            arr = np.array(img).astype(float)
+        else:
+            ds  = pydicom.dcmread(path, force=True)
+            arr = ds.pixel_array.astype(float)
+            if arr.ndim == 3:
+                arr = arr[..., 0]
         return (arr - arr.min()) / (arr.max() - arr.min() + 1e-9)
 
     # ── Colormap (cool-blue → dark-red across BMI range) ──────────────
@@ -653,13 +655,12 @@ def fig_bmi_gradient():
     def norm(b):
         return float(np.clip((b - bmi_lo) / (bmi_hi - bmi_lo), 0, 1))
 
-    # ── Figure layout: GridSpec(2, N) + explicit axes for colorbar ──────
+    # ── Figure layout ─────────────────────────────────────────────────
     fig_w = 3.8 * N + 1.4
     fig_h = 5.2 * 2 + 1.8
     fig = plt.figure(figsize=(fig_w, fig_h))
     fig.patch.set_facecolor("#0f172a")
 
-    # Image grid: 2 rows × N cols — direct cell indexing, no nesting
     gs = gridspec.GridSpec(
         2, N,
         figure=fig,
@@ -668,8 +669,8 @@ def fig_bmi_gradient():
         left=0.07, right=0.97,
     )
 
-    def draw_cell(row_i, col_i, dcm_list, bmi_anchor, row_label):
-        ax = fig.add_subplot(gs[row_i, col_i])   # direct — no nesting
+    def draw_cell(row_i, col_i, img_path, bmi_anchor, row_label):
+        ax = fig.add_subplot(gs[row_i, col_i])
         ax.set_facecolor("#0f172a")
         ax.set_xticks([]); ax.set_yticks([])
 
@@ -679,9 +680,8 @@ def fig_bmi_gradient():
             sp.set_edgecolor(border)
             sp.set_linewidth(4)
 
-        dcm = dcm_list[len(dcm_list) // 2]
         try:
-            ax.imshow(load_pixel(dcm), cmap="gray", aspect="auto")
+            ax.imshow(load_pixel(img_path), cmap="gray", aspect="auto")
         except Exception:
             ax.set_facecolor("#1e293b")
 
@@ -690,20 +690,18 @@ def fig_bmi_gradient():
                           fontsize=FONT_BASE + 1, fontweight="bold",
                           rotation=90, labelpad=12)
 
-    # HH images — row 0
-    for col_i, pick in enumerate(hh_picks):
-        case = int(pick["Case No"])
-        if case in hh_map:
-            draw_cell(0, col_i, hh_map[case], anchor_bmis[col_i], "HH (Handheld)")
+    # Draw columns (one patient per column)
+    for col_i, (_, row) in enumerate(picks_df.iterrows()):
+        case = int(row["Case No"])
+        if case in paired_data:
+            bmi = row["BMI"]
+            # Top: HH
+            draw_cell(0, col_i, paired_data[case]["hh"], bmi, "HH (Handheld)")
+            # Bottom: SC
+            draw_cell(1, col_i, paired_data[case]["sc"], bmi, "SC (Standard Care)")
 
-    # SC images — row 1
-    for col_i, pick in enumerate(sc_picks):
-        case = int(pick["Case No"])
-        if case in sc_map:
-            draw_cell(1, col_i, sc_map[case], anchor_bmis[col_i], "SC (Standard Care)")
-
-    # ── Shared BMI colorbar: placed with fig.add_axes (no gridspec conflict) ──
-    cax = fig.add_axes([0.07, 0.07, 0.90, 0.040])
+    # ── Shared BMI colorbar ──────────────────────────────────────────
+    cax = fig.add_axes([0.07, 0.02, 0.90, 0.038])
     sm  = plt.cm.ScalarMappable(
         cmap=bmi_cmap, norm=plt.Normalize(vmin=bmi_lo, vmax=bmi_hi))
     sm.set_array([])
@@ -720,8 +718,8 @@ def fig_bmi_gradient():
         cax.axvline(b, color="white", lw=1.8, alpha=0.6)
 
     fig.suptitle(
-        "POCUS Image Quality Across BMI Range  —  HH (top) vs SC (bottom)",
-        color="white", fontsize=FONT_BASE + 4, fontweight="bold", y=0.96,
+        "POCUS Paired Image Quality (HH vs SC) Across BMI Range",
+        color="white", fontsize=FONT_BASE + 4, fontweight="bold", y=0.99,
     )
     savefig("fig10_bmi_gradient_images.png")
 # ══════════════════════════════════════════════════════════════════════
