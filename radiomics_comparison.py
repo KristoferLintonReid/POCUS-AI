@@ -263,11 +263,14 @@ def main():
     cross_corr_p.index   = feat_names
     cross_corr_p.columns = feat_names
     
+    # Build annotation labels array (same shape as mat)
+    annot_labels = np.array([[f"{v:.2f}" if not np.isnan(v) else "" for v in row] for row in mat])
+    
     fig, ax = plt.subplots(figsize=(14, 12))
     sns.heatmap(
-        cross_corr_p, 
-        annot=True,
-        fmt=".2f",
+        cross_corr_p,              # data for colour mapping
+        annot=annot_labels,        # explicit string annotations –– bypasses seaborn dtype bug
+        fmt="",                    # must be empty string when annot is strings
         cmap="coolwarm",
         center=0,
         vmin=-1, vmax=1,
