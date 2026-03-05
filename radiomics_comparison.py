@@ -244,29 +244,46 @@ def main():
     plt.tight_layout()
     plt.savefig(os.path.join(FIG_DIR, "radiomics_correlation_comparison.png"), dpi=300)
     
-    # 2. Patient-Level Heatmap (the "correct" one showing aggregated signal)
-    hh_cols_p = [f"HH_{f}" for f in pat_corr.index]
-    sc_cols_p = [f"SC_{f}" for f in pat_corr.index]
+    # 2. Patient-Level Heatmap — build a clean float64 matrix for seaborn
+    hh_f_cols = [f"HH_{f}" for f in pat_corr.index]
+    sc_f_cols  = [f"SC_{f}"  for f in pat_corr.index]
+    feat_names = list(pat_corr.index)
+    n = len(feat_names)
     
-    cross_corr_p = pd.DataFrame(index=[f for f in pat_corr.index], 
-                                columns=[f for f in pat_corr.index])
+    # Compute pairwise correlations into a fresh numpy matrix
+    mat = np.full((n, n), np.nan)
+    for i, hf in enumerate(hh_f_cols):
+        for j, sf in enumerate(sc_f_cols):
+            sub = patient_df[[hf, sf]].dropna()
+            if len(sub) > 1:
+                mat[i, j] = float(sub.corr().iloc[0, 1])
     
-    for h_f in pat_corr.index:
-        for s_f in pat_corr.index:
-            r = patient_df[[f"HH_{h_f}", f"SC_{s_f}"]].dropna().corr().iloc[0, 1]
-            cross_corr_p.loc[h_f, s_f] = r
-            
-    cross_corr_p = cross_corr_p.astype(float)
+    # Build clean DataFrame — use integer positional index first, then rename
+    cross_corr_p = pd.DataFrame(mat, dtype=float)
+    cross_corr_p.index   = feat_names
+    cross_corr_p.columns = feat_names
     
-    plt.figure(figsize=(12, 10))
-    sns.heatmap(cross_corr_p, annot=True, fmt=".2f", cmap="coolwarm", center=0)
-    plt.title("Patient-Level Radiomics Heatmap (Averaged Features per Case)", fontweight="bold")
-    plt.xlabel("Standard Care (SC) Features")
-    plt.ylabel("Handheld (HH) Features")
+    fig, ax = plt.subplots(figsize=(14, 12))
+    sns.heatmap(
+        cross_corr_p, 
+        annot=True,
+        fmt=".2f",
+        cmap="coolwarm",
+        center=0,
+        vmin=-1, vmax=1,
+        annot_kws={"size": 9},
+        cbar_kws={'label': 'Pearson r'},
+        ax=ax
+    )
+    ax.set_title("Patient-Level Radiomics Heatmap\n(HH vs SC Averaged Features per Case)",
+                 fontweight="bold", pad=20)
+    ax.set_xlabel("Standard Care (SC) Features", labelpad=10)
+    ax.set_ylabel("Handheld (HH) Features", labelpad=10)
     plt.tight_layout()
     plt.savefig(os.path.join(FIG_DIR, "radiomics_heatmap_patient_level.png"), dpi=300)
+    plt.close()
     
-    print("\nSummary of Patient-Level Correlations:")
+    print("\nSummary of Patient-Level Correlations (Diagonal):")
     print(pat_corr.to_string())
     print("\n✓ Analysis complete.")
 
