@@ -49,6 +49,9 @@ def load_image_as_sitk(path):
             # (Frames, H, W, 3)
             arr = arr[0, :, :, 0]
     
+    # Robust normalization: clip top/bottom 1% to reduce UI/text interference
+    p1, p99 = np.percentile(arr, [1, 99])
+    arr = np.clip(arr, p1, p99)
     # Simple normalization to 0-255 for radiomics
     arr = (arr - arr.min()) / (arr.max() - arr.min() + 1e-9) * 255
     return sitk.GetImageFromArray(arr.astype(np.uint8))
@@ -65,9 +68,20 @@ def extract_first_order_features(sitk_img):
     extractor.enableAllFeatures()
     return extractor.execute()
 
+def fuzzy_normalize(s):
+    """Normalize names for fuzzy matching."""
+    s = s.lower()
+    s = s.replace("sagital", "sagittal")
+    s = s.replace("transverse", "trans")
+    s = s.replace("and", "&")
+    # remove all non-alphanumeric
+    s = _re.sub(r'[^a-z0-9]', '', s)
+    return s
+
 def find_paired_images():
-    """Identifies folders with paired HH and SC images by matching suffixes."""
+    """Identifies folders with paired HH and SC images by matching suffixes with robust fuzzy logic."""
     pairs = []
+    unpaired = []
     if not os.path.isdir(EP_IMG):
         return []
     
@@ -80,31 +94,61 @@ def find_paired_images():
         
         files = os.listdir(full)
         
-        # 1. Map HH images by their suffix (text after "HH ")
+        # 1. Map HH images by their fuzzy suffix
         hh_map = {}
         for f in files:
             if f.upper().startswith("HH") and f.lower().endswith(('.png', '.jpg', '.jpeg', '.dcm')):
-                suffix = _re.sub(r"^HH\s*", "", f, flags=_re.IGNORECASE)
-                suffix = os.path.splitext(suffix)[0].strip().lower()
-                hh_map[suffix] = os.path.join(full, f)
+                suffix_raw = _re.sub(r"^HH\s*", "", f, flags=_re.IGNORECASE)
+                suffix_raw = os.path.splitext(suffix_raw)[0].strip()
+                fuzzy_sfx = fuzzy_normalize(suffix_raw)
+                # Store (path, original_name, base_name_no_index)
+                base_name = _re.sub(r"\d+$", "", fuzzy_sfx)
+                hh_map[fuzzy_sfx] = (os.path.join(full, f), suffix_raw, base_name)
         
-        # 2. Map SC images by their suffix (text after "SC ")
+        # 2. Map SC images by their fuzzy suffix
         sc_map = {}
         for f in files:
             if f.upper().startswith("SC") and f.lower().endswith('.dcm'):
-                suffix = _re.sub(r"^SC\s*", "", f, flags=_re.IGNORECASE)
-                suffix = os.path.splitext(suffix)[0].strip().lower()
-                sc_map[suffix] = os.path.join(full, f)
+                suffix_raw = _re.sub(r"^SC\s*", "", f, flags=_re.IGNORECASE)
+                suffix_raw = os.path.splitext(suffix_raw)[0].strip()
+                fuzzy_sfx = fuzzy_normalize(suffix_raw)
+                base_name = _re.sub(r"\d+$", "", fuzzy_sfx)
+                sc_map[fuzzy_sfx] = (os.path.join(full, f), suffix_raw, base_name)
         
-        # 3. Pair them up where suffixes match
-        for sfx, hh_path in hh_map.items():
-            if sfx in sc_map:
-                pairs.append({
-                    "Case No": case_no,
-                    "Suffix": sfx,
-                    "hh_path": hh_path,
-                    "sc_path": sc_map[sfx]
-                })
+        # 3. Pair them up
+        matched_hh = set()
+        matched_sc = set()
+        
+        # Exact fuzzy match first
+        for sfx_h, (hh_path, hh_orig, base_h) in hh_map.items():
+            if sfx_h in sc_map:
+                sc_path, sc_orig, base_s = sc_map[sfx_h]
+                pairs.append({"Case No": case_no, "Suffix": hh_orig, "hh_path": hh_path, "sc_path": sc_path})
+                matched_hh.add(sfx_h); matched_sc.add(sfx_h)
+        
+        # Fuzzy match where one side lacks an index (e.g. 'Embryo' <-> 'Embryo 1')
+        for sfx_h, (hh_path, hh_orig, base_h) in hh_map.items():
+            if sfx_h in matched_hh: continue
+            for sfx_s, (sc_path, sc_orig, base_s) in sc_map.items():
+                if sfx_s in matched_sc: continue
+                if base_h == base_s:
+                    # One is a base of the other or both share base and one is indexed
+                    pairs.append({"Case No": case_no, "Suffix": hh_orig, "hh_path": hh_path, "sc_path": sc_path})
+                    matched_hh.add(sfx_h); matched_sc.add(sfx_s)
+                    break
+                    
+        # Log unpaired for debugging
+        for sfx_h, (hh_path, hh_orig, base_h) in hh_map.items():
+            if sfx_h not in matched_hh:
+                unpaired.append(f"Case {case_no}: HH {hh_orig} (unpaired)")
+        for sfx_s, (sc_path, sc_orig, base_s) in sc_map.items():
+            if sfx_s not in matched_sc:
+                unpaired.append(f"Case {case_no}: SC {sc_orig} (unpaired)")
+                
+    if unpaired:
+        print(f"\nReport: {len(unpaired)} files remained unpaired. (Top 10 below)")
+        for u in unpaired[:10]: print(f"  {u}")
+        
     return pairs
 
 def main():
@@ -159,63 +203,72 @@ def main():
     df.to_csv(csv_path, index=False)
     print(f"\nSaved raw results to {csv_path}")
     
-    # Compute correlation matrix between corresponding features
-    features = [c.replace("HH_", "") for c in df.columns if c.startswith("HH_")]
-    corr_data = {}
-    for feat in features:
-        hh_col = f"HH_{feat}"
-        sc_col = f"SC_{feat}"
-        if hh_col in df.columns and sc_col in df.columns:
-            # Filter non-constant signals
-            if df[hh_col].nunique() > 1 and df[sc_col].nunique() > 1:
-                sub = df[[hh_col, sc_col]].dropna()
-                if len(sub) > 1:
-                    r = sub.corr().iloc[0, 1]
-                    # Map NaN result to 0 for plotting
-                    corr_data[feat] = r if not np.isnan(r) else 0.0
+    # --- ANALYSIS PART ────────────────────────────────────────────────────────
     
-    if not corr_data:
-        print("\nNo varying features for correlation analysis.")
-        return
+    def compute_correlations(target_df, label):
+        cols = [c.replace("HH_", "") for c in target_df.columns if c.startswith("HH_")]
+        corr_dict = {}
+        for feat in cols:
+            h = f"HH_{feat}"; s = f"SC_{feat}"
+            if h in target_df.columns and s in target_df.columns:
+                if target_df[h].nunique() > 1 and target_df[s].nunique() > 1:
+                    sub = target_df[[h, s]].dropna()
+                    if len(sub) > 1:
+                        r = sub.corr().iloc[0, 1]
+                        corr_dict[feat] = r if not np.isnan(r) else 0.0
+        return pd.Series(corr_dict).sort_values(ascending=False)
 
-    # 1. Bar plot of diagonal correlations (paired corresponding features)
-    corr_series = pd.Series(corr_data).sort_values(ascending=False)
-    plt.figure(figsize=(10, 8))
-    sns.barplot(x=corr_series.values, y=corr_series.index, palette="mako")
+    print("\nRunning correlations...")
+    img_corr = compute_correlations(df, "Image-Level")
+    
+    # Patient-Level Averaging
+    feat_cols = [c for c in df.columns if c.startswith("HH_") or c.startswith("SC_")]
+    patient_df = df.groupby("Case No")[feat_cols].mean().reset_index()
+    pat_corr = compute_correlations(patient_df, "Patient-Level")
+    
+    print(f"Image-Level N: {len(df)}")
+    print(f"Patient-Level N: {len(patient_df)}")
+
+    # 1. Visual Comparison: Bar Plot
+    # Combine results for comparison
+    comp_df = pd.DataFrame({
+        "Image-Level (n=37)": img_corr,
+        "Patient-Level (n=14)": pat_corr
+    }).sort_values("Patient-Level (n=14)", ascending=False)
+
+    plt.figure(figsize=(12, 10))
+    comp_df.plot(kind="barh", figsize=(12, 10), color=["#2ecc71", "#3498db"], alpha=0.8)
     plt.axvline(0, color='black', lw=1)
-    plt.title("Correlation: HH vs SC Corresponding Features (Whole Image)", fontweight="bold")
+    plt.title("Radiomics Correlation: HH vs SC (Image-Level vs Patient-Level Average)", fontweight="bold")
     plt.xlabel("Pearson r")
     plt.tight_layout()
-    plt.savefig(os.path.join(FIG_DIR, "radiomics_correlation_summary.png"), dpi=300)
+    plt.savefig(os.path.join(FIG_DIR, "radiomics_correlation_comparison.png"), dpi=300)
     
-    # 2. Full Cross-Correlation Heatmap (HH features vs SC features)
-    # Extract just the feature columns for HH and SC
-    hh_cols = [c for c in df.columns if c.startswith("HH_") and c.replace("HH_", "") in corr_series.index]
-    sc_cols = [c for c in df.columns if c.startswith("SC_") and c.replace("SC_", "") in corr_series.index]
+    # 2. Patient-Level Heatmap (the "correct" one showing aggregated signal)
+    hh_cols_p = [f"HH_{f}" for f in pat_corr.index]
+    sc_cols_p = [f"SC_{f}" for f in pat_corr.index]
     
-    # Compute the cross-correlation matrix (HH vs SC)
-    cross_corr = pd.DataFrame(index=[c.replace("HH_", "") for c in hh_cols], 
-                              columns=[c.replace("SC_", "") for c in sc_cols])
+    cross_corr_p = pd.DataFrame(index=[f for f in pat_corr.index], 
+                                columns=[f for f in pat_corr.index])
     
-    for h_col in hh_cols:
-        for s_col in sc_cols:
-            r = df[[h_col, s_col]].dropna().corr().iloc[0, 1]
-            cross_corr.loc[h_col.replace("HH_", ""), s_col.replace("SC_", "")] = r
+    for h_f in pat_corr.index:
+        for s_f in pat_corr.index:
+            r = patient_df[[f"HH_{h_f}", f"SC_{s_f}"]].dropna().corr().iloc[0, 1]
+            cross_corr_p.loc[h_f, s_f] = r
             
-    cross_corr = cross_corr.astype(float)
+    cross_corr_p = cross_corr_p.astype(float)
     
     plt.figure(figsize=(12, 10))
-    sns.heatmap(cross_corr, annot=True, fmt=".2f", cmap="coolwarm", center=0, 
-                cbar_kws={'label': 'Pearson r'})
-    plt.title("Cross-Correlation Heatmap: HH Features vs SC Features", fontweight="bold")
+    sns.heatmap(cross_corr_p, annot=True, fmt=".2f", cmap="coolwarm", center=0)
+    plt.title("Patient-Level Radiomics Heatmap (Averaged Features per Case)", fontweight="bold")
     plt.xlabel("Standard Care (SC) Features")
     plt.ylabel("Handheld (HH) Features")
     plt.tight_layout()
-    plt.savefig(os.path.join(FIG_DIR, "radiomics_heatmap.png"), dpi=300)
+    plt.savefig(os.path.join(FIG_DIR, "radiomics_heatmap_patient_level.png"), dpi=300)
     
-    print("\nSummary of correlations:")
-    print(corr_series.to_string())
-    print(f"\n✓ Analysis complete. Heatmap saved to {os.path.join(FIG_DIR, 'radiomics_heatmap.png')}")
+    print("\nSummary of Patient-Level Correlations:")
+    print(pat_corr.to_string())
+    print("\n✓ Analysis complete.")
 
 if __name__ == "__main__":
     main()
