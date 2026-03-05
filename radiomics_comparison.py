@@ -244,7 +244,8 @@ def main():
     plt.tight_layout()
     plt.savefig(os.path.join(FIG_DIR, "radiomics_correlation_comparison.png"), dpi=300)
     
-    # 2. Patient-Level Heatmap — build a clean float64 matrix for seaborn
+    # 2. Patient-Level Heatmap — use matplotlib ax.text() for annotations
+    # because seaborn's annot engine silently drops rows when index names match column names
     hh_f_cols = [f"HH_{f}" for f in pat_corr.index]
     sc_f_cols  = [f"SC_{f}"  for f in pat_corr.index]
     feat_names = list(pat_corr.index)
@@ -258,32 +259,37 @@ def main():
             if len(sub) > 1:
                 mat[i, j] = float(sub.corr().iloc[0, 1])
     
-    # Build clean DataFrame — use integer positional index first, then rename
-    cross_corr_p = pd.DataFrame(mat, dtype=float)
-    cross_corr_p.index   = feat_names
-    cross_corr_p.columns = feat_names
-    
-    # Build annotation labels array (same shape as mat)
-    annot_labels = np.array([[f"{v:.2f}" if not np.isnan(v) else "" for v in row] for row in mat])
-    
     fig, ax = plt.subplots(figsize=(14, 12))
-    sns.heatmap(
-        cross_corr_p,              # data for colour mapping
-        annot=annot_labels,        # explicit string annotations –– bypasses seaborn dtype bug
-        fmt="",                    # must be empty string when annot is strings
-        cmap="coolwarm",
-        center=0,
-        vmin=-1, vmax=1,
-        annot_kws={"size": 9},
-        cbar_kws={'label': 'Pearson r'},
-        ax=ax
-    )
+    
+    # Draw the heatmap colours using imshow (guaranteed to not interfere with annotations)
+    im = ax.imshow(mat, cmap="coolwarm", aspect="auto", vmin=-1, vmax=1)
+    
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label('Pearson r', fontsize=11)
+    
+    # Draw every cell annotation using matplotlib directly
+    for i in range(n):
+        for j in range(n):
+            val = mat[i, j]
+            if not np.isnan(val):
+                # Use white text on dark cells, black on light
+                text_color = "white" if abs(val) > 0.5 else "black"
+                ax.text(j, i, f"{val:.2f}", ha="center", va="center",
+                        fontsize=8, color=text_color, fontweight="bold")
+    
+    # Axis ticks
+    ax.set_xticks(range(n))
+    ax.set_yticks(range(n))
+    ax.set_xticklabels(feat_names, rotation=45, ha="right", fontsize=9)
+    ax.set_yticklabels(feat_names, fontsize=9)
+    
     ax.set_title("Patient-Level Radiomics Heatmap\n(HH vs SC Averaged Features per Case)",
                  fontweight="bold", pad=20)
     ax.set_xlabel("Standard Care (SC) Features", labelpad=10)
     ax.set_ylabel("Handheld (HH) Features", labelpad=10)
     plt.tight_layout()
-    plt.savefig(os.path.join(FIG_DIR, "radiomics_heatmap_patient_level.png"), dpi=300)
+    plt.savefig(os.path.join(FIG_DIR, "radiomics_heatmap_patient_level.png"), dpi=300, bbox_inches="tight")
     plt.close()
     
     print("\nSummary of Patient-Level Correlations (Diagonal):")
